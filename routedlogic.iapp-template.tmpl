@@ -1,0 +1,242 @@
+#TMSH-VERSION: 13.1.0
+
+cli admin-partitions {
+    update-partition Common
+}
+sys application template /Common/routedlogic.iapp-template.v0.0.1 {
+    actions {
+        definition {
+            html-help {<p><b>Some iApp Title</b></p>
+<p>This iApp template assists the configuration of the BIG-IP to do stuff.</p>
+<p>Before you start:</p>
+<ul>
+<li>All of the help for this iApp template is found inline. Select <b>Yes, show inline help</b> from the inline help question for assistance in configuring the iApp.</li>
+</ul>}
+            implementation {
+              tmsh::include "f5.iapp.1.5.6.cli"
+tmsh::include "f5.app_utils"
+tmsh::include "routedlogic.iapp.0.0.1.cli"
+
+catch {iapp_template start}
+
+# this variable should not exist if the user is unable to deploy this iApp
+if { not [info exists ::INTRODUCTION__INLINE_HELP_CHOICE] } {
+  # this is how you forcibly cause the iapp deployment to error
+  return -code error "You click finished but the prerequisites for this iApp have not been met"
+}
+
+logDebugTimestamped "iApp implementation started"
+
+set app $tmsh::app_name
+
+tmsh::log_dest file
+tmsh::log_level crit
+
+if { [tmsh::get_field_value [lindex [tmsh::get_config sys scriptd log-level] 0] log-level] eq "debug" } {
+  set iapp__logLevel 10
+}
+
+set partition "/[lindex [split [tmsh::pwd] /] 1]"
+set partition_name "[lindex [split [tmsh::pwd] /] 1]"
+
+if { $partition == "/" } {
+   puts "Warning: behaviour not well defined when @partition is \"/\""
+   set defaultrd 0
+} else {
+   set obj [tmsh::get_config auth partition $partition_name default-route-domain]
+   set defaultrd [tmsh::get_field_value [lindex $obj 0] default-route-domain]
+}
+
+###################### PROCEDURES ######################
+#################### END PROCEDURES ####################
+
+################## CONFIG TEMPLATES ####################
+################ END CONFIG TEMPLATES ##################
+
+#################### SANE DEFAULTS #####################
+
+if { not [info exists ::VALUE] } { set ::VALUE "SOME DEFAULT" }
+
+################## END SANE DEFAULTS ###################
+
+###################### DO THINGS #######################
+
+if { ${::INTRODUCTION__STRICT_UPDATES_CHOICE} == "disable" } {
+  logDebugTimestamped "Disabling strict updates on policy as requested"
+
+  tmsh::modify "sys application service ${app} strict-updates disabled"
+} else {
+  logDebugTimestamped "Enforcing strict updates on policy as requested"
+
+  tmsh::modify "sys application service ${app} strict-updates enabled"
+}
+
+#################### END DO THINGS #####################
+
+logDebugTimestamped "iApp implementation finished"
+
+catch {iapp_template stop}
+            }
+            macro {
+            }
+            presentation {
+                include "/Common/f5.apl_common"
+
+######################## CHOICES ########################
+
+define choice BOOLEAN_DEFAULT_TRUE display "xxlarge" default "1" {
+  "True" => "1",
+  "False" => "0"
+}
+
+define choice BOOLEAN_DEFAULT_FALSE display "xxlarge" default "0" {
+  "True" => "1",
+  "False" => "0"
+}
+
+define choice TRUE_FALSE_DEFAULT_TRUE display "xxlarge" default "true" {
+  "True" => "true",
+  "False" => "false"
+}
+
+define choice TRUE_FALSE_DEFAULT_FALSE display "xxlarge" default "false" {
+  "True" => "true",
+  "False" => "false"
+}
+
+define choice YES_NO_DEFAULT_YES display "xxlarge" default "yes" {
+  "Yes" => "yes",
+  "No" => "no"
+}
+
+define choice YES_NO_DEFAULT_NO display "xxlarge" default "no" {
+  "Yes" => "yes",
+  "No" => "no"
+}
+
+define choice INLINE_HELP display "xxlarge" default "hide" {
+  "No, do not show inline help" => "hide",
+  "Yes, show inline help" => "max"
+}
+
+define choice IAPP_MODE display "xxlarge" default "basic" {
+  "Basic - Use recommended settings" => "basic",
+  "Advanced - Configure all options" => "advanced"
+}
+
+define choice STRICT_UPDATES default "enable" display "xxlarge" {
+  "Enable strict updates" => "enable",
+  "Disable strict updates" => "disable"
+}
+
+###################### END CHOICES ######################
+
+######################## SECTIONS #######################
+
+section INTRODUCTION {
+
+  optional ( "HIDE" == "THIS" ) {
+    choice LTM_PROVISIONED tcl { expr { [tmsh::run_proc f5.iapp.1.5.6.cli:iapp_get_provisioned ltm] ? "yes":"no" }}
+    choice AVR_PROVISIONED tcl { expr { [tmsh::run_proc f5.iapp.1.5.6.cli:iapp_get_provisioned avr] ? "yes":"no" }}
+    choice AFM_PROVISIONED tcl { expr { [tmsh::run_proc f5.iapp.1.5.6.cli:iapp_get_provisioned afm] ? "yes":"no" }}
+    choice ASM_PROVISIONED tcl { expr { [tmsh::run_proc f5.iapp.1.5.6.cli:iapp_get_provisioned asm] ? "yes":"no" }}
+    choice APM_PROVISIONED tcl { expr { [tmsh::run_proc f5.iapp.1.5.6.cli:iapp_get_provisioned apm] ? "yes":"no" }}
+    choice GTM_PROVISIONED tcl { expr { [tmsh::run_proc f5.iapp.1.5.6.cli:iapp_get_provisioned gtm] ? "yes":"no" }}
+    choice BASH_DISABLED   tcl { expr { [expr { [string first true [tmsh::list sys db systemauth.disablebash value]] != -1}] ? "yes" : "no" }}
+    choice CAN_EXEC        tcl { expr { [catch { exec /bin/true }] ? "no":"yes" }}
+  }
+
+  optional ( BASH_DISABLED == "yes" ) {
+    message NON_BASH_WARNING "You have opened this iApp while Bash is disabled. You can not run this iApp without Bash enabled."
+  }
+
+  optional ( CAN_EXEC == "no" ) {
+    message NO_EXEC_WARNING "You have opened this iApp as a user who cannot execute shell commands. This iApp requires the user deploying it to have an account that can do so."
+  }
+
+  optional ( BASH_DISABLED == "no" && CAN_EXEC == "yes" ) {
+    optional ( "HIDE" == "THIS" ) {
+        choice ALLOW_DEPLOY { "yes" }
+    }
+
+    message DESCRIPTION "Use this template to configure BIG-IP to do stuff."
+    message PREREQS_1 "Before using this iApp you must ensure that the following prerequisites are met:"
+    message PREREQS_2 "1. You deploy the iApp as a BIG-IP Administrator. Other roles, such as Manager, will lack sufficient permissions and deployment will fail."
+    message PREREQS_3 "2. This BIG-IP system, and any HA partners, have unrestricted outbound HTTPS access to the public Internet from their self IP's and floating self IP's. This is necessary when BIG-IP APM functions as an OAuth client and must communicate with cloud based services."
+    message PREREQS_4 "3. This BIG-IP system, and any HA partners, have access to appropriate internal DNS servers, or unrestricted outbound DNS access, using UDP/53 and TCP/53. This is necessary for the DNS Resolver object to function; which supports outbound HTTPS connectivity as an OAuth client."
+
+    INLINE_HELP INLINE_HELP_CHOICE
+    optional ( INLINE_HELP_CHOICE == "max" ) {
+      message INLINE_HELP_CHOICE_HELP "Inline help is available to provide contextual descriptions to aid in the completion of this configuration. Select to show or hide the inline help in this template. Important notes and warnings are always visible, no matter which selection you make here."
+    }
+
+    IAPP_MODE IAPP_MODE_CHOICE
+    optional ( INLINE_HELP_CHOICE == "max" ) {
+      message IAPP_MODE_CHOICE_HELP "This template supports basic and advanced configurations modes. Basic mode exposes the most commonly used settings, and automatically configures the rest of the options based on F5's recommended settings. Advanced mode allows you to review and change all settings. If you are unsure, select Basic."
+    }
+
+    optional ( IAPP_MODE_CHOICE == "advanced" ) {
+      optional ( INLINE_HELP_CHOICE == "max" ) {
+        message STRICT_UPDATES_CHOICE_HELP "If you disable strict updates you will be able to make manual changes to configuration objects created by the iApp. However; you may experience problems attempting to reconfigure or change the iApp after making changes outside of the iApp."
+      }
+      STRICT_UPDATES STRICT_UPDATES_CHOICE
+
+      optional ( INLINE_HELP_CHOICE == "max" ) {
+        message EXAMPLE_STRING_INPUT_HELP "Enter the correct value."
+      }
+      string EXAMPLE_STRING_INPUT display "xxlarge" validator "Number" required
+    }
+
+    optional ( INLINE_HELP_CHOICE == "max" ) {
+      message EXAMPLE_TRUE_FALSE_CHOICE_HELP "S.O.S."
+    }
+    TRUE_FALSE_DEFAULT_TRUE EXAMPLE_TRUE_FALSE_CHOICE
+
+    optional ( INLINE_HELP_CHOICE == "max" ) {
+      message EXAMPLE_SINGLE_CHOICE_FROM_GENERATED_VALUE_HELP "This value has been selected for you by software."
+    }
+    choice EXAMPLE_SINGLE_CHOICE_FROM_GENERATED_VALUE display "xxlarge" tcl { return "VALUE" }
+  }
+}
+###################### END SECTIONS ######################
+
+###################### TEXT DISPLAY ######################
+
+text {
+  INTRODUCTION "Welcome to some kind of iApp"
+  INTRODUCTION.NON_BASH_WARNING ""
+  INTRODUCTION.NO_EXEC_WARNING ""
+  INTRODUCTION.DESCRIPTION "Introduction"
+  INTRODUCTION.PREREQS_1 ""
+  INTRODUCTION.PREREQS_2 ""
+  INTRODUCTION.PREREQS_3 ""
+  INTRODUCTION.PREREQS_4 ""
+  INTRODUCTION.INLINE_HELP_CHOICE "Do you want to see inline help?"
+  INTRODUCTION.INLINE_HELP_CHOICE_HELP ""
+  INTRODUCTION.IAPP_MODE_CHOICE "Which configuration mode do you want to use?"
+  INTRODUCTION.IAPP_MODE_CHOICE_HELP ""
+  INTRODUCTION.STRICT_UPDATES_CHOICE_HELP ""
+  INTRODUCTION.STRICT_UPDATES_CHOICE "How should strict updates be configured for the iApp?"
+  INTRODUCTION.EXAMPLE_STRING_INPUT_HELP ""
+  INTRODUCTION.EXAMPLE_STRING_INPUT "What is 1+1?"
+  INTRODUCTION.EXAMPLE_TRUE_FALSE_CHOICE_HELP "Yes. He is a useless tool, throw him out, he does not belong in a tool box."
+  INTRODUCTION.EXAMPLE_TRUE_FALSE_CHOICE "Is Trump a tool?"
+  INTRODUCTION.EXAMPLE_SINGLE_CHOICE_FROM_GENERATED_VALUE_HELP ""
+  INTRODUCTION.EXAMPLE_SINGLE_CHOICE_FROM_GENERATED_VALUE ""
+}
+
+#################### END TEXT DISPLAY ####################
+            }
+            role-acl none
+            run-as none
+        }
+    }
+    description none
+    ignore-verification false
+    requires-bigip-version-max none
+    requires-bigip-version-min 13.1.0
+    requires-modules { }
+    signing-key none
+    tmpl-checksum none
+    tmpl-signature none
+}
