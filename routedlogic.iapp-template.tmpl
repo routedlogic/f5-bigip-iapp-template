@@ -1122,6 +1122,97 @@ proc iapp_get_ca_certs { args } {
     script-signature none
     signing-key none
 }
+cli script /Common/routedlogic.iapp.0.0.1.cli {
+proc applyAccessPolicy { policy_name {FIXME} } {
+      # APM policies do not commit in a reliable manner when configured via iApp.
+      # This time-bomb script insures that the policy gets committed.
+      # See subcase SR1-315233635 for details.
+      if { [catch {
+            set dir [tmsh::pwd]
+            set fn "/var/tmp/iapp_${policy_name}.sh"
+            set fh [open $fn w]
+            puts $fh "sleep 5"
+            puts $fh "tmsh modify apm profile access ${dir}/${policy_name} generation-action increment"
+            close $fh
+            exec chmod 777 $fn
+            exec $fn &
+      } err] } {
+          # indicate apply probably failed
+          return 0
+      }
+      # indicate apply should be successful
+      return 1
+    }
+
+    # determines if the current user can execute shell commands or not
+    proc canExecShell { } {
+        if { [catch { set asdf [exec /bin/true] }] } {
+            return 0
+        }
+        return 1
+    }
+
+    #
+    # Proc to generate a string of (given) characters
+    # Range defaults to "0...9ABCDEF...wxyz'
+    #
+    proc generateRandomAlphaNumericString {length {chars "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"}} {
+        set range [expr {[string length $chars]-1}]
+
+        set txt ""
+        for {set i 0} {$i < $length} {incr i} {
+           set pos [expr {int(rand()*$range)}]
+           append txt [string range $chars $pos $pos]
+        }
+        return $txt
+    }
+
+    # merge a configuration script to the running configuration
+    proc mergeToRunningConfig { { app {FIXME} } { cfg { } } } {
+      set fileId [open /var/tmp/${app}-merge.cfg "w"]
+      puts -nonewline ${fileId} ${cfg}
+      close ${fileId}
+
+      return [tmsh::load sys config merge file /var/tmp/${app}-merge.cfg]
+    }
+
+    # Determine if this iApp is a new configuration or an existing iApp that is now being reconfigured
+    # Returns true (1) if the iApp is being reconfigured
+    # Returns false (0) if the iApp is NOT being reconfigured, e.g. initial deployment for the first time
+    #
+    # WARNING: Will return false if the current user cannot execute shell commands.
+    #
+    proc iAppIsBeingReconfigured { } {
+      if { [catch {set asdf [exec tmsh list sys application service "[tmsh::pwd]/${tmsh::app_name}"] } ] } {
+        return {0}
+      }
+      return {1}
+    }
+
+    # Print timestamped and iApp path/name stamped logs to /var/tmp/scriptd.out
+    proc logDebugTimestamped { message } {
+      set currentSystemTime [clock seconds]
+      puts [format "\[%s %s\]\[%s\] %s" [clock format ${currentSystemTime} -format %D] [clock format ${currentSystemTime} -format %H:%M:%S] [tmsh::pwd]/${tmsh::app_name} ${message}]
+    }
+
+    proc timestamp_debug_log { message } {
+      set currentSystemTime [clock seconds]
+      puts [format "\[%s %s\]\[%s\] %s" [clock format ${currentSystemTime} -format %D] [clock format ${currentSystemTime} -format %H:%M:%S] [tmsh::pwd]/${tmsh::app_name} ${message}]
+    }
+
+    proc iapp_is_being_reconfigured {} {
+      if { [catch {set asdf [exec tmsh list sys application service "[tmsh::pwd]/${tmsh::app_name}"] } ] } {
+        return {0}
+      }
+      return {1}
+    }
+    app-service none
+    description none
+    ignore-verification false
+    script-checksum none
+    script-signature none
+    signing-key none
+}
 sys application template /Common/routedlogic.iapp-template.v0.0.1 {
     actions {
         definition {
@@ -1145,6 +1236,9 @@ if { not [info exists ::INTRODUCTION__INLINE_HELP_CHOICE] } {
 
 tmsh::include "f5.app_utils"
 tmsh::include "f5.iapp.1.5.6.cli"
+tmsh::include "routedlogic.iapp.0.0.1.cli"
+
+set app ${tmsh::app_name}
 
 catch {iapp_template start}
 
@@ -1179,6 +1273,50 @@ proc exampleProcedure { blah {asdf} } {
 #################### END PROCEDURES ####################
 
 ################## CONFIG TEMPLATES ####################
+
+array set example_apm_map {
+  default {
+    <PROFILE_TYPE> {apm profile access}
+    <GROUP_DEF> {type logout}
+    <PROFILE_DEF> "accept-languages replace-all-with \
+    { en ja zh-cn zh-tw ko es fr de }\n   \
+    access-policy <PREFIX>\n   \
+    customization-group <PREFIX>_logout\n   \
+    eps-group <PREFIX>_eps\n   \
+    errormap-group <PREFIX>_errormap\n   \
+    framework-installation-group <PREFIX>_frameworkinstallation\n   \
+    general-ui-group <PREFIX>_general_ui\n   \
+    defaults-from /Common/access"
+  }
+  ent_in {
+    <ITEM_AGENT> {}
+    <ITEM_CAPTION> {"Start"}
+    <ITEM_TYPE> {}
+    <RULE_NEXT_0> end_allow
+  }
+  end_allow {
+    <AGENT_DEF> {}
+    <AGENT_TYPE> ending-allow
+    <ITEM_CAPTION> {"Allow"}
+    <ITEM_TYPE> {item-type ending}
+    <ITEM_RULES> {}
+  }
+  end_deny {
+    <ACCESS_START_ITEM> <PREFIX>_ent_in
+    <ACCESS_ENDING> <PREFIX>_end_deny
+    <AGENT_TYPE> ending-deny
+    <GROUP_DEF> {type logout }
+    <ITEM_CAPTION> {"Deny"}
+    <ITEM_TYPE> {item-type ending}
+    <ITEM_COLOR> {2}
+    <ITEM_RULES> {}
+  }
+  webtop {
+    <RESOURCE_TYPE> webtop
+    <RESOURCE_DEF> "webtop-type full"
+  }
+}
+
 ################ END CONFIG TEMPLATES ##################
 
 #################### SANE DEFAULTS #####################
@@ -1191,8 +1329,16 @@ if { not [info exists ::VALUE] } { set ::VALUE "SOME DEFAULT" }
 ###################### DO THINGS #######################
 
 # example of how to create an iRule based on macro code and variables from the INTRODUCTION section
-set irule_definition_from_macro [tmsh::expand_macro -debuginclusive 99]
+set irule_definition_from_macro [tmsh::expand_macro -debuginclusive 99 -vars {a b c d}]
 tmsh::create ltm rule RULE-iApp-Macro-Example ${irule_definition_from_macro}
+
+set apm_map(prefix) [tmsh::pwd]/$app
+
+append pre_proc_map { <SOMETHING>  "something" }
+
+array set apm_map [string map [subst $pre_proc_map] [array get example_apm_map]]
+
+iapp_apm_config apm_map
 
 # example for how to modify strict updates on this application service
 if { ${::INTRODUCTION__STRICT_UPDATES_CHOICE} == "disable" } {
@@ -1207,6 +1353,7 @@ catch {iapp_template stop}
             }
             macro {
                 when HTTP_REQUEST {
+  <%D50= log local0. \"Current URI is: \[HTTP::uri\]\" %>
   set current_uri [HTTP::uri]
 }
             }
